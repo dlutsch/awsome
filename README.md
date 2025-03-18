@@ -138,18 +138,37 @@ Each method will pull the latest version from the repository and update your loc
 
 ## Configuration
 
-AWsome will interactively prompt for configuration during installation and preserve settings across updates.
+AWsome requires configuration to be stored in a configuration file at `~/.config/awsome/config`. The installer will create this file and prompt you for the necessary values.
 
 ### Configuration options:
 
-1. **AWS Region** - Used for both AWS operations and SSO (default: us-west-2)
-2. **SSO Start URL** - Your organization's AWS SSO URL (e.g., https://mycompany.awsapps.com/start)
+1. **DEFAULT_AWS_REGION** - Used for standard AWS CLI operations (default: us-west-2)
+2. **SSO_AWS_REGION** - Used specifically for SSO login operations (defaults to your default region)
+3. **SSO_START_URL** - Your organization's AWS SSO URL (e.g., https://mycompany.awsapps.com/start) - **REQUIRED**
 
 ### How it works:
 
 1. During installation, you'll be prompted to enter these values
-2. The values are baked into your local AWsome installation
+2. The values are saved to the configuration file at `~/.config/awsome/config`
 3. When updating, your existing configuration is automatically preserved
+4. You can manually edit the configuration file anytime to update your settings
+5. AWsome will check for the existence of this file and required values before running
+
+The configuration file is a simple shell script format that can be easily edited:
+
+```bash
+# AWsome Configuration
+# Generated on ...
+
+# AWS Default Region (used for standard AWS CLI operations)
+DEFAULT_AWS_REGION="us-west-2"
+
+# AWS SSO Region (used for SSO login)
+SSO_AWS_REGION="us-west-2"
+
+# AWS SSO Start URL
+SSO_START_URL="https://mycompany.awsapps.com/start"
+```
 
 You can view your current configuration any time by running `awsm config` or selecting "View Configuration" from the menu.
 

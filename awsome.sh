@@ -6,11 +6,86 @@
 # MIT License
 # Copyright (c) 2025 dlutsch
 # See LICENSE file for full license text
-#
-# Configuration values - these will be set during installation
-DEFAULT_REGION="us-west-2"  # AWS Default Region
-SSO_REGION="us-west-2"      # SSO Region - Same as DEFAULT_REGION by default
-SSO_START_URL=""            # SSO Start URL - No default value
+
+# Config file location
+AWSOME_CONFIG_DIR="$HOME/.config/awsome"
+AWSOME_CONFIG_FILE="$AWSOME_CONFIG_DIR/config"
+
+# Variables that will be populated from config file
+DEFAULT_REGION=""
+SSO_REGION=""
+SSO_START_URL=""
+
+# Check for config file and create it if it doesn't exist
+ensure_config_exists() {
+    # Create config directory if it doesn't exist
+    if [ ! -d "$AWSOME_CONFIG_DIR" ]; then
+        mkdir -p "$AWSOME_CONFIG_DIR"
+    fi
+    
+    # Create config file with defaults if it doesn't exist
+    if [ ! -f "$AWSOME_CONFIG_FILE" ]; then
+        cat > "$AWSOME_CONFIG_FILE" <<EOL
+# AWsome Configuration
+# Generated on $(date)
+
+# AWS Default Region (used for standard AWS CLI operations)
+DEFAULT_AWS_REGION="us-west-2"
+
+# AWS SSO Region (used for SSO login)
+SSO_AWS_REGION="us-west-2"
+
+# AWS SSO Start URL (REQUIRED)
+SSO_START_URL="$SSO_START_URL"
+EOL
+        echo "Created default configuration file at $AWSOME_CONFIG_FILE"
+        echo "Please edit this file to set your SSO Start URL before using AWsome."
+        
+        # If SSO_START_URL is empty, advise the user to configure it
+        if [ -z "$SSO_START_URL" ]; then
+            echo "ERROR: SSO Start URL is required. Please run:"
+            echo "  awsm config"
+            echo "Or edit the config file directly to set your SSO Start URL."
+        fi
+    fi
+
+# Read from the config file
+source "$AWSOME_CONFIG_FILE"
+
+# Update variables with values from the config file
+if [ -n "$DEFAULT_AWS_REGION" ]; then
+    DEFAULT_REGION="$DEFAULT_AWS_REGION"
+fi
+if [ -n "$SSO_AWS_REGION" ]; then
+    SSO_REGION="$SSO_AWS_REGION"
+fi
+
+# Fall back to a single region if either is missing
+if [ -n "$AWS_REGION" ]; then
+    # For backwards compatibility
+    if [ -z "$DEFAULT_REGION" ]; then
+        DEFAULT_REGION="$AWS_REGION"
+    fi
+    if [ -z "$SSO_REGION" ]; then
+        SSO_REGION="$AWS_REGION"
+    fi
+fi
+    
+    # Ensure SSO_START_URL is set
+    if [ -z "$SSO_START_URL" ]; then
+        echo "ERROR: SSO Start URL is not set in $AWSOME_CONFIG_FILE"
+        echo "Please edit the config file to set your SSO Start URL before using AWsome."
+        return 1
+    fi
+}
+
+# Ensure config exists before proceeding
+ensure_config_exists || {
+    # If we're just showing config, don't exit
+    if [[ "$1" != "config" && "$1" != "c" ]]; then
+        exit 1
+    fi
+}
 
 precheck() {
     # Create AWS config directory if it doesn't exist
@@ -19,6 +94,18 @@ precheck() {
     # Path to AWS config file
     AWS_CONFIG_FILE="$HOME/.aws/config"
     AWS_CREDENTIALS_FILE="$HOME/.aws/credentials"
+
+    # Check if files exist before we try to create them
+    CONFIG_EXISTED=false
+    CREDS_EXISTED=false
+    
+    if [ -f "$AWS_CONFIG_FILE" ]; then
+        CONFIG_EXISTED=true
+    fi
+    
+    if [ -f "$AWS_CREDENTIALS_FILE" ]; then
+        CREDS_EXISTED=true
+    fi
 
     # Create empty files if they don't exist
     touch "$AWS_CONFIG_FILE"
@@ -35,6 +122,12 @@ precheck() {
         echo "Default profile is not set. Adding it..."
         echo "[default]" >> "$AWS_CREDENTIALS_FILE"
         echo "manager = awsume" >> "$AWS_CREDENTIALS_FILE"
+    fi
+    
+    # If we created the files from scratch, populate them with available profiles
+    if [ "$CONFIG_EXISTED" = false ] || [ "$CREDS_EXISTED" = false ]; then
+        echo "AWS config files were created. Populating with available profiles..."
+        repopulate_config
     fi
 
     # Check if awsume is installed
@@ -277,8 +370,12 @@ show_config() {
     gum style --foreground 6 "  $SSO_START_URL"
     echo ""
     
-    gum style --foreground 4 "To change these settings, reinstall AWsome with the"
-    gum style --foreground 4 "appropriate environment variables set."
+    gum style --foreground 5 --bold "Configuration File:"
+    gum style --foreground 6 "  $AWSOME_CONFIG_FILE"
+    echo ""
+    
+    gum style --foreground 4 "To change these settings, edit the configuration file at:"
+    gum style --foreground 6 "  $AWSOME_CONFIG_FILE"
     echo ""
     
     # Wait for user to press key

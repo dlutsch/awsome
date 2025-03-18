@@ -14,7 +14,9 @@ AWS_REGION="us-west-2"  # Default AWS region for both default and SSO
 SSO_START_URL=""        # No default SSO URL
 
 INSTALL_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config/awsome"
+REPO_DIR="$HOME/.local/share/awsome"  # Repository/code files directory
+AWSOME_CONFIG_DIR="$HOME/.config/awsome"  # User configuration directory
+AWSOME_CONFIG_FILE="$AWSOME_CONFIG_DIR/config"
 REPO_URL="https://github.com/dlutsch/awsome"
 SCRIPT_NAME="awsome.sh"
 
@@ -162,7 +164,8 @@ check_requirements() {
 setup_directories() {
     colorize "blue" "Setting up directories..."
     mkdir -p "$INSTALL_DIR"
-    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$REPO_DIR"
+    mkdir -p "$AWSOME_CONFIG_DIR"
 }
 
 # Clone or update the repository
@@ -172,29 +175,29 @@ download_awsome() {
     # If we're running from the awsome directory, use local files
     if [ -f "./$SCRIPT_NAME" ]; then
         colorize "green" "Using local AWsome files"
-        # Create config dir and copy files there
-        mkdir -p "$CONFIG_DIR"
-        cp -r ./* "$CONFIG_DIR/"
+        # Create repo dir and copy files there
+        mkdir -p "$REPO_DIR"
+        cp -r ./* "$REPO_DIR/"
         # Initialize git repo if it doesn't exist
-        if [ ! -d "$CONFIG_DIR/.git" ]; then
+        if [ ! -d "$REPO_DIR/.git" ]; then
             colorize "blue" "Initializing git repository..."
-            cd "$CONFIG_DIR"
+            cd "$REPO_DIR"
             git init
             git add .
             git commit -m "Initial commit"
             # Set the remote for future updates
             git remote add origin "$REPO_URL"
         fi
-    elif [ -d "$CONFIG_DIR/.git" ]; then
+    elif [ -d "$REPO_DIR/.git" ]; then
         # Repository exists, update it
-        cd "$CONFIG_DIR"
+        cd "$REPO_DIR"
         # Check for local modifications before pulling
         if [ -n "$(git status --porcelain)" ]; then
-            colorize "yellow" "Local modifications detected in $CONFIG_DIR"
+            colorize "yellow" "Local modifications detected in $REPO_DIR"
             # Backup local changes
-            BACKUP_DIR="$CONFIG_DIR.backup.$(date +%Y%m%d%H%M%S)"
+            BACKUP_DIR="$REPO_DIR.backup.$(date +%Y%m%d%H%M%S)"
             colorize "blue" "Creating backup of local files at $BACKUP_DIR"
-            cp -r "$CONFIG_DIR" "$BACKUP_DIR"
+            cp -r "$REPO_DIR" "$BACKUP_DIR"
             
             # Try to stash changes - for tracked files
             if git diff --quiet HEAD; then
@@ -209,9 +212,9 @@ download_awsome() {
             UNTRACKED_FILES=$(git ls-files --others --exclude-standard)
             if [ -n "$UNTRACKED_FILES" ]; then
                 colorize "blue" "Moving untracked files temporarily"
-                mkdir -p "$CONFIG_DIR/.untracked_backup"
+                mkdir -p "$REPO_DIR/.untracked_backup"
                 for file in $UNTRACKED_FILES; do
-                    mv "$file" "$CONFIG_DIR/.untracked_backup/" 2>/dev/null || true
+                    mv "$file" "$REPO_DIR/.untracked_backup/" 2>/dev/null || true
                 done
             fi
         fi
@@ -228,17 +231,17 @@ download_awsome() {
         }
         
         # Restore untracked files if any
-        if [ -d "$CONFIG_DIR/.untracked_backup" ] && [ -n "$(ls -A "$CONFIG_DIR/.untracked_backup" 2>/dev/null)" ]; then
+        if [ -d "$REPO_DIR/.untracked_backup" ] && [ -n "$(ls -A "$REPO_DIR/.untracked_backup" 2>/dev/null)" ]; then
             colorize "blue" "Restoring untracked files"
-            cp -r "$CONFIG_DIR/.untracked_backup/"* "$CONFIG_DIR/" 2>/dev/null || true
-            rm -rf "$CONFIG_DIR/.untracked_backup" 2>/dev/null || true
+            cp -r "$REPO_DIR/.untracked_backup/"* "$REPO_DIR/" 2>/dev/null || true
+            rm -rf "$REPO_DIR/.untracked_backup" 2>/dev/null || true
         fi
     else
         # Clone the repository 
-        git clone "$REPO_URL" "$CONFIG_DIR" || {
+        git clone "$REPO_URL" "$REPO_DIR" || {
             colorize "red" "Git clone failed. Creating empty repository."
-            mkdir -p "$CONFIG_DIR"
-            cd "$CONFIG_DIR"
+            mkdir -p "$REPO_DIR"
+            cd "$REPO_DIR"
             # If clone fails, create a basic repo with the current script
             git init
             if [ -f "../$SCRIPT_NAME" ]; then
@@ -262,25 +265,59 @@ get_configuration() {
     gum style --foreground 6 --bold "AWS Configuration"
     echo ""
     
-    # Prompt for AWS Region
-    gum style --foreground 4 "Please enter your preferred AWS Region"
-    gum style --foreground 7 "(This will be used for both AWS operations and SSO)"
-    AWS_REGION=$(gum input --placeholder "$AWS_REGION" --value "$AWS_REGION")
+    # Prompt for Default AWS Region
+    gum style --foreground 4 "Please enter your preferred Default AWS Region"
+    gum style --foreground 7 "(Used for standard AWS CLI operations)"
+    DEFAULT_AWS_REGION=$(gum input --placeholder "us-west-2" --value "$DEFAULT_AWS_REGION")
     # Use the default if user entered nothing
-    AWS_REGION=${AWS_REGION:-"us-west-2"}
+    DEFAULT_AWS_REGION=${DEFAULT_AWS_REGION:-"us-west-2"}
     
-    # Prompt for AWS SSO Start URL
+    # Prompt for SSO AWS Region
     echo ""
-    gum style --foreground 4 "Please enter your AWS SSO Start URL" 
+    gum style --foreground 4 "Please enter your AWS SSO Region"
+    gum style --foreground 7 "(Used for SSO login operations, often the same as default region)"
+    SSO_AWS_REGION=$(gum input --placeholder "$DEFAULT_AWS_REGION" --value "$SSO_AWS_REGION")
+    # Use the default region if user entered nothing
+    SSO_AWS_REGION=${SSO_AWS_REGION:-"$DEFAULT_AWS_REGION"}
+    
+    # Prompt for AWS SSO Start URL (required)
+    echo ""
+    gum style --foreground 4 "Please enter your AWS SSO Start URL (REQUIRED)" 
     gum style --foreground 7 "(e.g., https://mycompany.awsapps.com/start)"
-    SSO_START_URL=$(gum input --placeholder "https://example.awsapps.com/start" --value "$SSO_START_URL")
+    
+    # Keep prompting until a non-empty value is provided
+    while [ -z "$SSO_START_URL" ]; do
+        SSO_START_URL=$(gum input --placeholder "https://example.awsapps.com/start" --value "$SSO_START_URL")
+        
+        if [ -z "$SSO_START_URL" ]; then
+            gum style --foreground 1 "SSO Start URL is required. Please enter a valid URL."
+        fi
+    done
     
     # Display confirmation
     echo ""
     gum style --foreground 2 --bold "Configuration confirmed:"
-    gum style --foreground 6 "  AWS Region: $AWS_REGION"
-    gum style --foreground 6 "  SSO Start URL: ${SSO_START_URL:-"<None>"}"
+    gum style --foreground 6 "  Default AWS Region: $DEFAULT_AWS_REGION"
+    gum style --foreground 6 "  SSO AWS Region: $SSO_AWS_REGION"
+    gum style --foreground 6 "  SSO Start URL: $SSO_START_URL"
     echo ""
+    
+    # Save the configuration to the config file
+    colorize "blue" "Saving configuration to $AWSOME_CONFIG_FILE..."
+    mkdir -p "$AWSOME_CONFIG_DIR"
+    cat > "$AWSOME_CONFIG_FILE" <<EOL
+# AWsome Configuration
+# Generated on $(date)
+
+# AWS Default Region (used for standard AWS CLI operations)
+DEFAULT_AWS_REGION="$DEFAULT_AWS_REGION"
+
+# AWS SSO Region (used for SSO login)
+SSO_AWS_REGION="$SSO_AWS_REGION"
+
+# AWS SSO Start URL (REQUIRED)
+SSO_START_URL="$SSO_START_URL"
+EOL
 }
 
 # Install the script and inject configuration
@@ -289,10 +326,10 @@ install_script() {
     
     # Check if the main script exists in the expected location
     local script_path=""
-    if [ -f "$CONFIG_DIR/$SCRIPT_NAME" ]; then
-        script_path="$CONFIG_DIR/$SCRIPT_NAME"
+    if [ -f "$REPO_DIR/$SCRIPT_NAME" ]; then
+        script_path="$REPO_DIR/$SCRIPT_NAME"
     elif [ -f "./$SCRIPT_NAME" ]; then
-        # If not found in config dir but exists in current dir, use that
+        # If not found in repo dir but exists in current dir, use that
         colorize "yellow" "Using script from current directory."
         script_path="./$SCRIPT_NAME"
     else
@@ -301,20 +338,9 @@ install_script() {
         exit 1
     fi
     
-    # Create a temporary file with modifications
-    local temp_file=$(mktemp)
-    
-    # Replace configuration values in the script
-    sed -e "s|DEFAULT_REGION=\".*\"|DEFAULT_REGION=\"$AWS_REGION\"|" \
-        -e "s|SSO_REGION=\".*\"|SSO_REGION=\"$AWS_REGION\"|" \
-        -e "s|SSO_START_URL=\".*\"|SSO_START_URL=\"$SSO_START_URL\"|" \
-        "$script_path" > "$temp_file"
-    
-    # Copy the modified script to the install directory
-    cp "$temp_file" "$INSTALL_DIR/$SCRIPT_NAME"
-    
-    # Clean up temporary file
-    rm "$temp_file"
+    # Copy the script to the install directory without modification
+    # (it will now read from config file)
+    cp "$script_path" "$INSTALL_DIR/$SCRIPT_NAME"
     
     # Make it executable
     chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
@@ -322,48 +348,22 @@ install_script() {
     # Create update script in the install directory that preserves configuration
     cat > "$INSTALL_DIR/awsome-update" <<EOL
 #!/bin/bash
-# Extract current configuration values before updating
-CURRENT_INSTALL="$INSTALL_DIR/$SCRIPT_NAME"
-if [ -f "\$CURRENT_INSTALL" ]; then
-    # Extract current configuration values
-    CURRENT_AWS_REGION=\$(grep "^DEFAULT_REGION=" "\$CURRENT_INSTALL" | cut -d'"' -f2)
-    CURRENT_SSO_START_URL=\$(grep "^SSO_START_URL=" "\$CURRENT_INSTALL" | cut -d'"' -f2)
-    
-    # Ensure we're using the same region for both
-    if [ -z "\$CURRENT_AWS_REGION" ]; then
-        CURRENT_AWS_REGION=\$(grep "^SSO_REGION=" "\$CURRENT_INSTALL" | cut -d'"' -f2)
-    fi
-else
-    # Use defaults if not found
-    CURRENT_AWS_REGION="${AWS_REGION}"
-    CURRENT_SSO_START_URL="${SSO_START_URL}"
-fi
-
-echo "Using configuration from existing installation:"
-echo "  AWS Region: \$CURRENT_AWS_REGION"
-echo "  SSO Start URL: \$CURRENT_SSO_START_URL"
+# Check for existing configuration
+AWSOME_CONFIG_DIR="$AWSOME_CONFIG_DIR"
+AWSOME_CONFIG_FILE="$AWSOME_CONFIG_FILE"
 
 # Update from repository
-cd "$CONFIG_DIR"
-git pull origin main
+cd "$REPO_DIR"
+git pull origin main || {
+    echo "Git pull failed, continuing with existing files"
+}
 
-# Create a temporary file with modifications
-TEMP_FILE=\$(mktemp)
-    
-# Replace configuration values in the script
-sed -e "s|DEFAULT_REGION=\".*\"|DEFAULT_REGION=\"\$CURRENT_AWS_REGION\"|" \\
-    -e "s|SSO_REGION=\".*\"|SSO_REGION=\"\$CURRENT_AWS_REGION\"|" \\
-    -e "s|SSO_START_URL=\".*\"|SSO_START_URL=\"\$CURRENT_SSO_START_URL\"|" \\
-    "$CONFIG_DIR/$SCRIPT_NAME" > "\$TEMP_FILE"
-
-# Copy the modified script to the install directory
-cp "\$TEMP_FILE" "$INSTALL_DIR/$SCRIPT_NAME"
-
-# Clean up temporary file
-rm "\$TEMP_FILE"
-
+# Copy the script to the install directory
+cp "$REPO_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$SCRIPT_NAME"
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
-echo "AWsome has been updated to the latest version with your customized configuration."
+
+echo "AWsome has been updated to the latest version."
+echo "Your configuration at \$AWSOME_CONFIG_FILE is preserved."
 EOL
     
     # Make update script executable
