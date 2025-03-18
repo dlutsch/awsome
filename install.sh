@@ -97,12 +97,17 @@ check_requirements() {
     
     # Install Python packages if pip is available
     if [ -n "$PIP_CMD" ]; then
+        # Determine Python user bin path
+        PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        PYTHON_USER_BIN="$HOME/Library/Python/$PYTHON_VERSION/bin"
+        
         # Install awsume if needed
         if ! command -v awsume &> /dev/null; then
             colorize "blue" "Installing awsume..."
             $PIP_CMD install --user awsume
+            
             # Add pip user bin to PATH for this session
-            export PATH="$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin:$PATH"
+            export PATH="$PYTHON_USER_BIN:$PATH"
         else
             colorize "green" "✓ awsume is already installed"
         fi
@@ -111,9 +116,38 @@ check_requirements() {
         if ! command -v aws-sso-util &> /dev/null; then
             colorize "blue" "Installing aws-sso-util..."
             $PIP_CMD install --user aws-sso-util
-            # Path already updated above
+            
+            # Add pip user bin to PATH for this session if not done already
+            export PATH="$PYTHON_USER_BIN:$PATH"
         else
             colorize "green" "✓ aws-sso-util is already installed"
+        fi
+        
+        # Ensure PATH is properly set for future sessions
+        colorize "blue" "Ensuring Python packages are in PATH..."
+        
+        # Detect the user's shell by checking the SHELL environment variable
+        USER_SHELL=$(basename "$SHELL")
+        
+        # Determine the appropriate RC file based on the detected shell
+        if [ "$USER_SHELL" = "zsh" ]; then
+            SHELL_RC="$HOME/.zshrc"
+        elif [ "$USER_SHELL" = "bash" ]; then
+            SHELL_RC="$HOME/.bashrc"
+        else
+            # Default to zsh on macOS
+            SHELL_RC="$HOME/.zshrc"
+        fi
+        
+        # Add Python user bin to PATH in shell config if not already there
+        if ! grep -q "PATH.*$PYTHON_USER_BIN" "$SHELL_RC"; then
+            colorize "blue" "Adding Python user bin to PATH in $SHELL_RC"
+            echo "" >> "$SHELL_RC"
+            echo "# Python user bin path (added by AWsome installer)" >> "$SHELL_RC"
+            echo "export PATH=\"$PYTHON_USER_BIN:\$PATH\"" >> "$SHELL_RC"
+            
+            colorize "yellow" "PATH has been updated. Please restart your terminal or run:"
+            colorize "yellow" "source $SHELL_RC"
         fi
     else
         colorize "yellow" "Python package manager not found. Please install awsume and aws-sso-util manually."

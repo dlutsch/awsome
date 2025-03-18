@@ -6,9 +6,16 @@ SSO_REGION="us-west-2"      # SSO Region - Same as DEFAULT_REGION by default
 SSO_START_URL=""            # SSO Start URL - No default value
 
 precheck() {
+    # Create AWS config directory if it doesn't exist
+    mkdir -p "$HOME/.aws"
+    
     # Path to AWS config file
     AWS_CONFIG_FILE="$HOME/.aws/config"
     AWS_CREDENTIALS_FILE="$HOME/.aws/credentials"
+
+    # Create empty files if they don't exist
+    touch "$AWS_CONFIG_FILE"
+    touch "$AWS_CREDENTIALS_FILE"
 
     # A 'default' profile is required
     if ! grep -q '^\[profile default\]' "$AWS_CONFIG_FILE"; then
