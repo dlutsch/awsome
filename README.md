@@ -165,6 +165,8 @@ You can view your current configuration any time by running `awsm config` or sel
 - When switching profiles, the script automatically checks if you're logged in to SSO
 - Config repopulation can be followed by profile switching in a single workflow
 - All operations provide clear visual feedback about their progress and status
+- SSO login requires both the SSO start URL and region to be properly configured
+
 
 ## Contributing
 
