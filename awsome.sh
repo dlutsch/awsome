@@ -356,7 +356,7 @@ precheck() {
     # aws-sso-util configure populate --region $DEFAULT_REGION --sso-region $SSO_REGION --sso-start-url $SSO_START_URL
     if [ "$CONFIG_EXISTED" = false ] || [ "$CREDS_EXISTED" = false ]; then
         echo "AWS config files were created. Populating with available profiles..."
-        repopulate_config
+        repopulate_config "silent"
     fi
 
     # Check if awsume is installed
@@ -426,15 +426,18 @@ perform_login() {
 
 # Function to repopulate AWS config
 repopulate_config() {
-    gum style \
-        --foreground 4 --border normal --border-foreground 4 \
-        --align center --width 70 \
-        "This will repopulate your AWS config file with all available profiles"
-    
-    # Ask for confirmation before proceeding
-    if ! gum confirm "Do you want to proceed?"; then
-        gum style --foreground 3 "Operation cancelled."
-        return 1
+    # Skip confirmation if silent mode is requested (used during initial setup)
+    if [ "$1" != "silent" ]; then
+        gum style \
+            --foreground 4 --border normal --border-foreground 4 \
+            --align center --width 70 \
+            "This will repopulate your AWS config file with all available profiles"
+        
+        # Ask for confirmation before proceeding
+        if ! gum confirm "Do you want to proceed?"; then
+            gum style --foreground 3 "Operation cancelled."
+            return 1
+        fi
     fi
     
     # Show spinner while repopulating config
@@ -571,6 +574,14 @@ update_awsome() {
         --foreground 2 \
         --bold --align center \
         "✓ AWsome has been updated to the latest version"
+    
+    # After successful update, reset the update check cache
+    local current_time=$(date +%s)
+    # Try to get to the repo dir
+    if cd "$REPO_DIR" 2>/dev/null; then
+        # Reset the BEHIND_COUNT to 0 since we just updated
+        write_update_cache "$current_time" "0" "$(git rev-parse HEAD 2>/dev/null || echo "")"
+    fi
     
     # Ask if user wants to reload the script
     if gum confirm "Do you want to reload AWsome now?"; then
