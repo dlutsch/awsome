@@ -575,7 +575,7 @@ update_awsome() {
     # Ask if user wants to reload the script
     if gum confirm "Do you want to reload AWsome now?"; then
         gum style --foreground 4 "Please run the script again to use the updated version."
-        exit 0
+        return 0
     fi
 }
 
