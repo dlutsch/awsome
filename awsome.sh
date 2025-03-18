@@ -19,7 +19,7 @@ if [ -f "$JUST_UPDATED_FLAG" ]; then
   rm -f "$JUST_UPDATED_FLAG" 2>/dev/null
   rm -f "$AWSOME_CONFIG_DIR/update-cache.json" 2>/dev/null
   rm -f "/tmp/awsome_update_banner_shown" 2>/dev/null
-  echo "Update cache cleared after recent upgrade."
+  # Debug message removed
 fi
 
 # Variables that will be populated from config file
@@ -586,15 +586,17 @@ update_awsome() {
     local current_time=$(date +%s)
     
     # Force removal of old cache files
-    rm -f "$UPDATE_CACHE_FILE" 2>/dev/null
     rm -f "$UPDATE_BANNER_SHOWN_FILE" 2>/dev/null
     touch "$JUST_UPDATED_FLAG" 2>/dev/null
     
+    # Create a new update cache with proper timestamp instead of deleting it
+    local current_time=$(date +%s)
+    
     if cd "$REPO_DIR" 2>/dev/null; then
-        # Ensure we're fully synced with origin/main
-        timeout $GIT_TIMEOUT git fetch --quiet origin 2>/dev/null || true
-        git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
-        git reset --hard origin/main 2>/dev/null || git reset --hard origin/master 2>/dev/null || true
+        # Ensure we're fully synced with origin/main (silently)
+        timeout $GIT_TIMEOUT git fetch --quiet origin > /dev/null 2>&1 || true
+        git checkout main > /dev/null 2>&1 || git checkout master > /dev/null 2>&1 || true
+        git reset --hard origin/main > /dev/null 2>&1 || git reset --hard origin/master > /dev/null 2>&1 || true
         
         # Verify current HEAD matches remote
         local current_head=$(git rev-parse HEAD 2>/dev/null || echo "")
@@ -603,10 +605,6 @@ update_awsome() {
         if [ -n "$current_head" ] && [ -n "$remote_head" ] && [ "$current_head" = "$remote_head" ]; then
             FAILED_CHECKS=0
             write_update_cache "$current_time" "0" "$current_head"
-            echo ""
-            gum style \
-                --foreground 6 --align center \
-                "Update status reset. Cache expiration: $(date -r "$((current_time + UPDATE_CACHE_DURATION))" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || date -d "@$((current_time + UPDATE_CACHE_DURATION))" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
         else
             echo ""
             gum style \

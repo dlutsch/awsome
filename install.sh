@@ -370,7 +370,7 @@ AWSOME_CONFIG_FILE="$AWSOME_CONFIG_FILE"
 
 # Update from repository
 cd "$REPO_DIR"
-git pull origin main || {
+git pull origin main > /dev/null 2>&1 || {
     echo "Git pull failed, continuing with existing files"
 }
 
