@@ -11,6 +11,17 @@
 AWSOME_CONFIG_DIR="$HOME/.config/awsome"
 AWSOME_CONFIG_FILE="$AWSOME_CONFIG_DIR/config"
 
+# Flag file to detect if script was just updated
+JUST_UPDATED_FLAG="/tmp/awsome_just_updated"
+
+# Check if we were just updated and force clean the update cache if so
+if [ -f "$JUST_UPDATED_FLAG" ]; then
+  rm -f "$JUST_UPDATED_FLAG" 2>/dev/null
+  rm -f "$AWSOME_CONFIG_DIR/update-cache.json" 2>/dev/null
+  rm -f "/tmp/awsome_update_banner_shown" 2>/dev/null
+  echo "Update cache cleared after recent upgrade."
+fi
+
 # Variables that will be populated from config file
 DEFAULT_REGION=""
 SSO_REGION=""
@@ -114,7 +125,7 @@ check_for_updates() {
                 --foreground 3 --background 0 --border double --border-foreground 3 \
                 --align center --width 70 --margin "1 0" --padding "0 2" \
                 "🚀 Update Available! There are $BEHIND_COUNT new changes available." \
-                "Run 'awu' or select 'Update AWsome' from the menu to upgrade."
+                "Run 'awsm update' or select 'Update AWsome' from the menu to upgrade."
             echo ""
         fi
         
@@ -551,39 +562,64 @@ update_awsome() {
         --align center --width 70 \
         "This will update AWsome to the latest version"
     
-    # Check if update script exists
     if ! command -v awsome-update &> /dev/null; then
         gum style --foreground 1 "Update script not found. You may need to reinstall AWsome."
         return 1
     fi
     
-    # Ask for confirmation before proceeding
     if ! gum confirm "Do you want to proceed with the update?"; then
         gum style --foreground 3 "Update cancelled."
         return 1
     fi
     
-    # Show spinner while updating
     gum spin --spinner dot --title "Updating AWsome..." -- bash -c "
         awsome-update
         sleep 1
     "
     
-    # Show success message
     gum style \
         --foreground 2 \
         --bold --align center \
         "✓ AWsome has been updated to the latest version"
     
-    # After successful update, reset the update check cache
+    # Enhanced update reset logic
     local current_time=$(date +%s)
-    # Try to get to the repo dir
+    
+    # Force removal of old cache files
+    rm -f "$UPDATE_CACHE_FILE" 2>/dev/null
+    rm -f "$UPDATE_BANNER_SHOWN_FILE" 2>/dev/null
+    touch "$JUST_UPDATED_FLAG" 2>/dev/null
+    
     if cd "$REPO_DIR" 2>/dev/null; then
-        # Reset the BEHIND_COUNT to 0 since we just updated
-        write_update_cache "$current_time" "0" "$(git rev-parse HEAD 2>/dev/null || echo "")"
+        # Ensure we're fully synced with origin/main
+        timeout $GIT_TIMEOUT git fetch --quiet origin 2>/dev/null || true
+        git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
+        git reset --hard origin/main 2>/dev/null || git reset --hard origin/master 2>/dev/null || true
+        
+        # Verify current HEAD matches remote
+        local current_head=$(git rev-parse HEAD 2>/dev/null || echo "")
+        local remote_head=$(git rev-parse origin/main 2>/dev/null || git rev-parse origin/master 2>/dev/null || echo "")
+        
+        if [ -n "$current_head" ] && [ -n "$remote_head" ] && [ "$current_head" = "$remote_head" ]; then
+            FAILED_CHECKS=0
+            write_update_cache "$current_time" "0" "$current_head"
+            echo ""
+            gum style \
+                --foreground 6 --align center \
+                "Update status reset. Cache expiration: $(date -r "$((current_time + UPDATE_CACHE_DURATION))" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || date -d "@$((current_time + UPDATE_CACHE_DURATION))" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
+        else
+            echo ""
+            gum style \
+                --foreground 3 --align center \
+                "Warning: Could not verify update sync. Banner may persist."
+        fi
+    else
+        echo ""
+        gum style \
+            --foreground 1 --align center \
+            "Error: Could not access repository directory."
     fi
     
-    # Ask if user wants to reload the script
     if gum confirm "Do you want to reload AWsome now?"; then
         gum style --foreground 4 "Please run the script again to use the updated version."
         return 0
