@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# AWS Session Manager (AWsome)
+# https://github.com/dlutsch/awsome
+#
+# MIT License
+# Copyright (c) 2025 dlutsch
+# See LICENSE file for full license text
+#
 # Configuration values - these will be set during installation
 DEFAULT_REGION="us-west-2"  # AWS Default Region
 SSO_REGION="us-west-2"      # SSO Region - Same as DEFAULT_REGION by default

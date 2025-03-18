@@ -2,6 +2,10 @@
 
 # AWsome Installer Script
 # This script downloads and installs AWsome for macOS
+#
+# MIT License
+# Copyright (c) 2025 dlutsch
+# See LICENSE file for full license text
 
 set -e # Exit on error
 
