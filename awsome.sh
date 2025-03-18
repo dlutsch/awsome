@@ -16,6 +16,233 @@ DEFAULT_REGION=""
 SSO_REGION=""
 SSO_START_URL=""
 
+# Repository directory (where git commands will be executed)
+REPO_DIR="${REPO_DIR:-$HOME/.local/share/awsome}"
+
+# Update check cache file
+UPDATE_CACHE_FILE="$AWSOME_CONFIG_DIR/update-cache.json"
+# Default cache validity in seconds (24 hours)
+UPDATE_CACHE_DURATION=86400
+# Timeout for git network operations in seconds
+GIT_TIMEOUT=2
+
+# Function to read update cache
+read_update_cache() {
+    # Initialize default values
+    LAST_CHECK=0
+    LAST_SUCCESSFUL_CHECK=0
+    FAILED_CHECKS=0
+    REMOTE_HEAD=""
+    BEHIND_COUNT=0
+    CACHE_EXPIRES_AT=0
+    
+    if [ -f "$UPDATE_CACHE_FILE" ]; then
+        # Read values from cache file if it exists
+        # Using grep and cut for basic parsing since jq might not be available
+        LAST_CHECK=$(grep -o '"last_check":[0-9]*' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d ':' -f 2 || echo "0")
+        LAST_SUCCESSFUL_CHECK=$(grep -o '"last_successful_check":[0-9]*' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d ':' -f 2 || echo "0")
+        FAILED_CHECKS=$(grep -o '"failed_checks":[0-9]*' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d ':' -f 2 || echo "0")
+        REMOTE_HEAD=$(grep -o '"remote_head":"[^"]*"' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d '"' -f 4 || echo "")
+        BEHIND_COUNT=$(grep -o '"behind_count":[0-9]*' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d ':' -f 2 || echo "0")
+        CACHE_EXPIRES_AT=$(grep -o '"expires_at":[0-9]*' "$UPDATE_CACHE_FILE" 2>/dev/null | cut -d ':' -f 2 || echo "0")
+    fi
+}
+
+# Function to write update cache
+write_update_cache() {
+    local current_time timestamp success_time behind remote_head
+    
+    current_time=$(date +%s)
+    timestamp=$current_time
+    success_time=$1
+    behind=$2
+    remote_head=$3
+    
+    # Ensure config directory exists
+    mkdir -p "$AWSOME_CONFIG_DIR" 2>/dev/null
+    
+    # Calculate expiration time
+    local expires_at=$((current_time + UPDATE_CACHE_DURATION))
+    
+    # Write cache file
+    cat > "$UPDATE_CACHE_FILE" << EOL
+{
+  "last_check": $timestamp,
+  "last_successful_check": $success_time,
+  "failed_checks": $FAILED_CHECKS,
+  "remote_head": "$remote_head",
+  "behind_count": $behind,
+  "expires_at": $expires_at
+}
+EOL
+}
+
+# Function to check for available updates with caching
+check_for_updates() {
+    # Only check if git is installed
+    if ! command -v git &> /dev/null; then
+        return 0
+    fi
+    
+    # Check if repo directory exists and is a git repo
+    if [ ! -d "$REPO_DIR" ] || [ ! -d "$REPO_DIR/.git" ]; then
+        # Don't show errors during normal operation, but still return safely
+        return 0
+    fi
+    
+    # If we've already shown the update banner recently, don't show it again
+    if update_banner_shown; then
+        return 0
+    fi
+    
+    # Current time
+    local current_time
+    current_time=$(date +%s)
+    
+    # Read the cache
+    read_update_cache
+    
+    # Check if cache is still valid (not expired)
+    if [ "$current_time" -lt "$CACHE_EXPIRES_AT" ]; then
+        # Cache is still valid, use cached data
+        if [ "$BEHIND_COUNT" -gt 0 ]; then
+            # Mark that we've shown the banner
+            mark_update_banner_shown
+            
+            echo ""
+            gum style \
+                --foreground 3 --background 0 --border double --border-foreground 3 \
+                --align center --width 70 --margin "1 0" --padding "0 2" \
+                "🚀 Update Available! There are $BEHIND_COUNT new changes available." \
+                "Run 'awu' or select 'Update AWsome' from the menu to upgrade."
+            echo ""
+        fi
+        
+        # Show offline indicator if we've had multiple failed checks and last successful check was a while ago
+        if [ "$FAILED_CHECKS" -gt 3 ] && [ "$((current_time - LAST_SUCCESSFUL_CHECK))" -gt "$((UPDATE_CACHE_DURATION * 3))" ]; then
+            echo ""
+            gum style \
+                --foreground 8 --align right --width 70 \
+                "⚠️ Update checks failing. Network issues?"
+            echo ""
+        fi
+        
+        return 0
+    fi
+    
+    # Check quietly - we don't want to show errors if network is down
+    (
+        # Try to access the repo directory
+        if ! cd "$REPO_DIR" 2>/dev/null; then
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+            return 0
+        fi
+        
+        # Verify we can get the current HEAD (basic git operations work)
+        local_head=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        if [ "$local_head" = "unknown" ]; then
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+            return 0
+        fi
+        
+        # Check remote configuration
+        remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+        if [ -z "$remote_url" ]; then
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+            return 0
+        fi
+        
+        # Determine the remote branch name (main or master)
+        remote_branch="main"
+        
+        # Try a fast remote check first
+        if timeout $GIT_TIMEOUT git ls-remote --heads origin "$remote_branch" &>/dev/null; then
+            # Got remote data successfully
+            
+            # Fetch quietly with a short timeout
+            if ! timeout $GIT_TIMEOUT git fetch --quiet origin 2>/dev/null; then
+                # Fetch failed, increment failed checks counter
+                FAILED_CHECKS=$((FAILED_CHECKS + 1))
+                write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+                return 0
+            fi
+            
+            # Try to get the remote head
+            if ! git rev-parse origin/$remote_branch &>/dev/null; then
+                # If main branch doesn't exist, try master
+                if ! git rev-parse origin/master &>/dev/null; then
+                    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+                    write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+                    return 0
+                else
+                    remote_branch="master"
+                fi
+            fi
+            
+            # Get the latest remote HEAD
+            new_remote_head=$(git rev-parse origin/$remote_branch 2>/dev/null || echo "unknown")
+            if [ "$new_remote_head" = "unknown" ]; then
+                FAILED_CHECKS=$((FAILED_CHECKS + 1))
+                write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+                return 0
+            fi
+            
+            # Check if we're behind the remote
+            new_behind_count=$(git rev-list HEAD..origin/$remote_branch --count 2>/dev/null || echo "0")
+            
+            # Update cache with success
+            FAILED_CHECKS=0
+            write_update_cache "$current_time" "$new_behind_count" "$new_remote_head"
+            
+            # If there are updates available, show banner
+            if [ "$new_behind_count" -gt 0 ]; then
+                # Mark that we've shown the banner
+                mark_update_banner_shown
+                
+                echo ""
+                gum style \
+                    --foreground 3 --background 0 --border double --border-foreground 3 \
+                    --align center --width 70 --margin "1 0" --padding "0 2" \
+                    "🚀 Update Available! There are $new_behind_count new changes available." \
+                    "Run 'awsm update' or select 'Update AWsome' from the menu to upgrade."
+                echo ""
+            fi
+        else
+            # Network failed, increment failed checks counter
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            
+            # Use cached data if we have it
+            write_update_cache "$LAST_SUCCESSFUL_CHECK" "$BEHIND_COUNT" "$REMOTE_HEAD"
+            
+            # Only show cached update banner if cached data indicates updates
+            if [ "$BEHIND_COUNT" -gt 0 ]; then
+                # Mark that we've shown the banner
+                mark_update_banner_shown
+                
+                echo ""
+                gum style \
+                    --foreground 3 --background 0 --border double --border-foreground 3 \
+                    --align center --width 70 --margin "1 0" --padding "0 2" \
+                    "🚀 Update Available! There are $BEHIND_COUNT new changes available." \
+                    "Run 'awsm update' or select 'Update AWsome' from the menu to upgrade."
+                echo ""
+            fi
+            
+            # If we've had multiple failed checks, show a small indicator
+            if [ "$FAILED_CHECKS" -gt 3 ]; then
+                echo ""
+                gum style \
+                    --foreground 8 --align right --width 70 \
+                    "⚠️ Update checks failing. Network issues?"
+                echo ""
+            fi
+        fi
+    ) 2>/dev/null # Suppress all errors from the subshell
+}
+
 # Check for config file and create it if it doesn't exist
 ensure_config_exists() {
     # Create config directory if it doesn't exist
@@ -49,28 +276,28 @@ EOL
         fi
     fi
 
-# Read from the config file
-source "$AWSOME_CONFIG_FILE"
+    # Read from the config file
+    source "$AWSOME_CONFIG_FILE"
 
-# Update variables with values from the config file
-if [ -n "$DEFAULT_AWS_REGION" ]; then
-    DEFAULT_REGION="$DEFAULT_AWS_REGION"
-fi
-if [ -n "$SSO_AWS_REGION" ]; then
-    SSO_REGION="$SSO_AWS_REGION"
-fi
+    # Update variables with values from the config file
+    if [ -n "$DEFAULT_AWS_REGION" ]; then
+        DEFAULT_REGION="$DEFAULT_AWS_REGION"
+    fi
+    if [ -n "$SSO_AWS_REGION" ]; then
+        SSO_REGION="$SSO_AWS_REGION"
+    fi
 
-# Fall back to a single region if either is missing
-if [ -n "$AWS_REGION" ]; then
-    # For backwards compatibility
-    if [ -z "$DEFAULT_REGION" ]; then
-        DEFAULT_REGION="$AWS_REGION"
+    # Fall back to a single region if either is missing
+    if [ -n "$AWS_REGION" ]; then
+        # For backwards compatibility
+        if [ -z "$DEFAULT_REGION" ]; then
+            DEFAULT_REGION="$AWS_REGION"
+        fi
+        if [ -z "$SSO_REGION" ]; then
+            SSO_REGION="$AWS_REGION"
+        fi
     fi
-    if [ -z "$SSO_REGION" ]; then
-        SSO_REGION="$AWS_REGION"
-    fi
-fi
-    
+        
     # Ensure SSO_START_URL is set
     if [ -z "$SSO_START_URL" ]; then
         echo "ERROR: SSO Start URL is not set in $AWSOME_CONFIG_FILE"
@@ -125,6 +352,8 @@ precheck() {
     fi
     
     # If we created the files from scratch, populate them with available profiles
+    # This uses the repopulate_config function which will call:
+    # aws-sso-util configure populate --region $DEFAULT_REGION --sso-region $SSO_REGION --sso-start-url $SSO_START_URL
     if [ "$CONFIG_EXISTED" = false ] || [ "$CREDS_EXISTED" = false ]; then
         echo "AWS config files were created. Populating with available profiles..."
         repopulate_config
@@ -374,6 +603,58 @@ show_config() {
     gum style --foreground 6 "  $AWSOME_CONFIG_FILE"
     echo ""
     
+    # Read update cache
+    read_update_cache
+    
+    # Show update status section
+    gum style --foreground 5 --bold "Update Status:"
+    
+    # Format timestamps to human-readable format - use cross-platform timestamp conversion
+    format_timestamp() {
+        local timestamp=$1
+        if [ "$timestamp" -gt 0 ]; then
+            # Try BSD style (macOS)
+            if date -r "$timestamp" &>/dev/null; then
+                date -r "$timestamp" "+%Y-%m-%d %H:%M:%S"
+            # Try GNU style (Linux)
+            elif date -d "@$timestamp" &>/dev/null; then
+                date -d "@$timestamp" "+%Y-%m-%d %H:%M:%S"
+            else
+                echo "Unknown date format"
+            fi
+        else
+            echo "Never"
+        fi
+    }
+    
+    last_check_date=$(format_timestamp "$LAST_CHECK")
+    gum style --foreground 6 "  Last check: $last_check_date"
+    
+    if [ "$LAST_SUCCESSFUL_CHECK" -gt 0 ] && [ "$LAST_SUCCESSFUL_CHECK" -ne "$LAST_CHECK" ]; then
+        last_success_date=$(format_timestamp "$LAST_SUCCESSFUL_CHECK")
+        gum style --foreground 6 "  Last successful check: $last_success_date"
+    fi
+
+    # Show update availability
+    if [ "$BEHIND_COUNT" -gt 0 ]; then
+        gum style --foreground 3 "  🚀 Updates available: $BEHIND_COUNT new changes"
+    elif [ "$LAST_CHECK" -gt 0 ]; then
+        gum style --foreground 2 "  ✓ Up to date"
+    fi
+    
+    # Show next scheduled check
+    if [ "$CACHE_EXPIRES_AT" -gt 0 ]; then
+        next_check=$(format_timestamp "$CACHE_EXPIRES_AT")
+        gum style --foreground 6 "  Next scheduled check: $next_check"
+    fi
+    
+    # Show failed check info if relevant
+    if [ "$FAILED_CHECKS" -gt 0 ]; then
+        gum style --foreground 3 "  ⚠️ Failed update checks: $FAILED_CHECKS"
+    fi
+    
+    echo ""
+    
     gum style --foreground 4 "To change these settings, edit the configuration file at:"
     gum style --foreground 6 "  $AWSOME_CONFIG_FILE"
     echo ""
@@ -384,6 +665,12 @@ show_config() {
 
 # Main menu function
 show_main_menu() {
+    # Only check for updates if not already done
+    # When called directly from main with no arguments, the check is already done
+    if [ "$1" != "no_update_check" ]; then
+        check_for_updates
+    fi
+    
     gum style \
         --foreground 4 --border double --border-foreground 4 \
         --align center --width 60 \
@@ -437,8 +724,162 @@ show_main_menu() {
     esac
 }
 
+# Function to force update check
+force_update_check() {
+    gum style \
+        --foreground 4 --border normal --border-foreground 4 \
+        --align center --width 70 \
+        "Checking for AWsome updates..."
+    
+    # Force a complete update check
+    local current_time=$(date +%s)
+    
+    # Check pre-requisites
+    if ! command -v git &> /dev/null; then
+        gum style --foreground 3 "Git is not installed. Unable to check for updates."
+        return 1
+    fi
+    
+    # Check if repo directory exists
+    if [ ! -d "$REPO_DIR" ]; then
+        gum style --foreground 3 "Repository directory not found at $REPO_DIR."
+        return 1
+    fi
+    
+    # Check if it's a git repo
+    if [ ! -d "$REPO_DIR/.git" ]; then
+        gum style --foreground 3 "Not a git repository at $REPO_DIR."
+        return 1
+    fi
+    
+    # Try to access the repo directory
+    if ! cd "$REPO_DIR" 2>/dev/null; then
+        gum style --foreground 3 "Cannot access repository directory. Check permissions."
+        return 1
+    fi
+    
+    # Verify we can get the current HEAD (basic git operations work)
+    local_head=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [ "$local_head" = "unknown" ]; then
+        gum style --foreground 3 "Unable to read git repository state."
+        return 1
+    fi
+    
+    # Check remote configuration
+    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    if [ -z "$remote_url" ]; then
+        gum style --foreground 3 "No remote 'origin' configured in git repository."
+        return 1
+    fi
+    
+    # Show spinner while checking for updates
+    fetch_success=false
+    gum spin --spinner dot --title "Fetching latest updates..." -- bash -c "
+        # Try to fetch with a timeout
+        if timeout $GIT_TIMEOUT git fetch origin 2>/dev/null; then
+            echo 'success' > /tmp/awsome_fetch_result
+        else
+            echo 'fail' > /tmp/awsome_fetch_result
+        fi
+    "
+    
+    # Check fetch result
+    if [ -f "/tmp/awsome_fetch_result" ] && [ "$(cat /tmp/awsome_fetch_result)" = "success" ]; then
+        fetch_success=true
+        rm -f "/tmp/awsome_fetch_result" 2>/dev/null
+    else
+        rm -f "/tmp/awsome_fetch_result" 2>/dev/null
+    fi
+    
+    if ! $fetch_success; then
+        gum style --foreground 1 "Failed to fetch updates. Network issue or remote repository unavailable."
+        return 1
+    fi
+    
+    # Try to get the remote head
+    if ! git rev-parse origin/main &>/dev/null; then
+        # If main branch doesn't exist, try master
+        if ! git rev-parse origin/master &>/dev/null; then
+            gum style --foreground 3 "Cannot find main or master branch on remote."
+            return 1
+        else
+            remote_branch="master"
+        fi
+    else
+        remote_branch="main"
+    fi
+    
+    # Get the latest commit information
+    new_remote_head=$(git rev-parse origin/$remote_branch 2>/dev/null || echo "unknown")
+    if [ "$new_remote_head" = "unknown" ]; then
+        gum style --foreground 3 "Unable to determine remote version."
+        return 1
+    fi
+    
+    # Check if we're behind the remote
+    new_behind_count=$(git rev-list HEAD..origin/$remote_branch --count 2>/dev/null || echo "0")
+    
+    # Reset failed checks counter and update cache
+    FAILED_CHECKS=0
+    write_update_cache "$current_time" "$new_behind_count" "$new_remote_head"
+    
+    # Show appropriate message
+    if [ "$new_behind_count" -gt 0 ]; then
+        gum style \
+            --foreground 3 --bold --align center \
+            "🚀 Update Available! There are $new_behind_count new changes available."
+        
+        # Ask if user wants to update now
+        if gum confirm "Would you like to update AWsome now?"; then
+            update_awsome
+        fi
+    else
+        gum style \
+            --foreground 2 --bold --align center \
+            "✓ AWsome is up to date!"
+    fi
+}
+
+# Temporary file to track if we've shown the update banner recently
+UPDATE_BANNER_SHOWN_FILE="/tmp/awsome_update_banner_shown"
+UPDATE_BANNER_SHOWN_TIMEOUT=30 # seconds
+
+# Function to check if update banner was recently shown
+update_banner_shown() {
+    # If the file doesn't exist, banner hasn't been shown
+    if [ ! -f "$UPDATE_BANNER_SHOWN_FILE" ]; then
+        return 1 # false
+    fi
+    
+    # Check if the file is recent (within timeout period)
+    file_time=$(stat -c %Y "$UPDATE_BANNER_SHOWN_FILE" 2>/dev/null || stat -f %m "$UPDATE_BANNER_SHOWN_FILE" 2>/dev/null)
+    current_time=$(date +%s)
+    
+    # If file time couldn't be read or file is older than timeout, consider banner not shown
+    if [ -z "$file_time" ] || [ "$((current_time - file_time))" -gt "$UPDATE_BANNER_SHOWN_TIMEOUT" ]; then
+        return 1 # false
+    fi
+    
+    return 0 # true - banner was recently shown
+}
+
+# Function to mark the update banner as shown
+mark_update_banner_shown() {
+    # Create or touch the file to update its timestamp
+    touch "$UPDATE_BANNER_SHOWN_FILE" 2>/dev/null
+}
+
 # Process command line arguments
 process_args() {
+    # Check if this is a direct update check request
+    if [[ "$1" == "update" || "$1" == "u" ]] && [[ "$2" == "--check" || "$2" == "-c" ]]; then
+        force_update_check
+        return
+    fi
+    
+    # Normal update check for all other commands
+    check_for_updates
+
     case "$1" in
         "profile"|"p"|"")  # Default behavior is to switch profile
             switch_profile
@@ -466,6 +907,7 @@ process_args() {
             echo "  $(basename "$0") r|repopulate - Repopulate AWS config"
             echo "  $(basename "$0") c|config     - View configuration settings"
             echo "  $(basename "$0") u|update     - Update AWsome to latest version"
+            echo "  $(basename "$0") u|update -c  - Check for AWsome updates"
             echo "  $(basename "$0") m|menu       - Show interactive menu"
             echo "  $(basename "$0") h|help       - Show this help message"
             ;;
@@ -487,8 +929,9 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 else
     # Script is executed directly (useful for UI operations but credentials won't be exported)
     if [[ $# -eq 0 ]]; then
-        # No arguments provided, show the menu
-        show_main_menu
+        # No arguments provided, do a single check for updates then show the menu
+        check_for_updates
+        show_main_menu "no_update_check"
     else
         # Arguments provided, process them
         process_args "$@"

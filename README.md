@@ -18,9 +18,10 @@ AWsome is an elegant and powerful CLI tool for managing AWS credentials, profile
 
 ## Requirements
 
-1. [aws-sso-util](https://github.com/benkehoe/aws-sso-util) - Utility for AWS SSO
-2. [awsume](https://github.com/trek10inc/awsume) - A utility for using AWS IAM credentials
-3. [gum](https://github.com/charmbracelet/gum) - A tool for glamorous shell scripts
+1. [git](https://git-scm.com/) - Required for update functionality
+2. [aws-sso-util](https://github.com/benkehoe/aws-sso-util) - Utility for AWS SSO
+3. [awsume](https://github.com/trek10inc/awsume) - A utility for using AWS IAM credentials
+4. [gum](https://github.com/charmbracelet/gum) - A tool for glamorous shell scripts
 
 ## Installation
 

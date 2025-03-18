@@ -40,9 +40,25 @@ check_requirements() {
     
     # Check git
     if ! command -v git &> /dev/null; then
-        colorize "red" "Error: git is not installed. Please install git and try again."
-        colorize "yellow" "Tip: You can install git using Homebrew: brew install git"
-        exit 1
+        colorize "yellow" "Git is not installed. Git is required for update functionality."
+        
+        # Ask if user wants to install git
+        read -p "Would you like to install git now? (y/n): " install_git
+        if [[ $install_git == "y" || $install_git == "Y" ]]; then
+            if command -v brew &> /dev/null; then
+                colorize "blue" "Installing git using Homebrew..."
+                brew install git
+                if ! command -v git &> /dev/null; then
+                    colorize "red" "Git installation failed. Please install git manually."
+                    colorize "yellow" "Continuing installation without git. Update functionality will be limited."
+                fi
+            else
+                colorize "yellow" "Homebrew is not installed. Cannot install git automatically."
+                colorize "yellow" "Continuing installation without git. Update functionality will be limited."
+            fi
+        else
+            colorize "yellow" "Continuing without git. Update functionality will be limited."
+        fi
     fi
     
     # Check and install Homebrew if needed
