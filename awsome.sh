@@ -415,7 +415,7 @@ aws_sso_login() {
 # Helper function to perform the actual login
 perform_login() {
     gum spin --spinner dot --title "Logging in to AWS SSO..." -- bash -c "
-        aws-sso-util login --sso-start-url $SSO_START_URL --sso-region $SSO_REGION
+        aws-sso-util login --sso-start-url $SSO_START_URL --sso-region $SSO_REGION 2>/dev/null
         sleep 1
     "
     
