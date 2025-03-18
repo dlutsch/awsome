@@ -150,11 +150,53 @@ download_awsome() {
     elif [ -d "$CONFIG_DIR/.git" ]; then
         # Repository exists, update it
         cd "$CONFIG_DIR"
+        # Check for local modifications before pulling
+        if [ -n "$(git status --porcelain)" ]; then
+            colorize "yellow" "Local modifications detected in $CONFIG_DIR"
+            # Backup local changes
+            BACKUP_DIR="$CONFIG_DIR.backup.$(date +%Y%m%d%H%M%S)"
+            colorize "blue" "Creating backup of local files at $BACKUP_DIR"
+            cp -r "$CONFIG_DIR" "$BACKUP_DIR"
+            
+            # Try to stash changes - for tracked files
+            if git diff --quiet HEAD; then
+                # No changes to tracked files
+                colorize "blue" "No changes to tracked files"
+            else
+                colorize "blue" "Stashing tracked changes before pull"
+                git stash || colorize "yellow" "Could not stash changes"
+            fi
+            
+            # Handle untracked files that would be overwritten by pull
+            UNTRACKED_FILES=$(git ls-files --others --exclude-standard)
+            if [ -n "$UNTRACKED_FILES" ]; then
+                colorize "blue" "Moving untracked files temporarily"
+                mkdir -p "$CONFIG_DIR/.untracked_backup"
+                for file in $UNTRACKED_FILES; do
+                    mv "$file" "$CONFIG_DIR/.untracked_backup/" 2>/dev/null || true
+                done
+            fi
+        fi
+        
+        # Now pull from remote
         git pull origin main || {
             colorize "yellow" "Git pull failed, continuing with existing files"
         }
+        
+        # Restore stashed changes if any
+        git stash list | grep -q 'stash@{0}' && {
+            colorize "blue" "Restoring stashed changes"
+            git stash pop || colorize "yellow" "Could not restore stashed changes"
+        }
+        
+        # Restore untracked files if any
+        if [ -d "$CONFIG_DIR/.untracked_backup" ] && [ -n "$(ls -A "$CONFIG_DIR/.untracked_backup" 2>/dev/null)" ]; then
+            colorize "blue" "Restoring untracked files"
+            cp -r "$CONFIG_DIR/.untracked_backup/"* "$CONFIG_DIR/" 2>/dev/null || true
+            rm -rf "$CONFIG_DIR/.untracked_backup" 2>/dev/null || true
+        fi
     else
-        # Clone the repository
+        # Clone the repository 
         git clone "$REPO_URL" "$CONFIG_DIR" || {
             colorize "red" "Git clone failed. Creating empty repository."
             mkdir -p "$CONFIG_DIR"
